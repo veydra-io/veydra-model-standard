@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "veydra-model-standard"
 version = "1.0.0"
-description = "Standard base class for Veydra system dynamics models"
-authors = [{name = "Veydra Team", email = "team@veydra.com"}]
-license = {text = "MIT"}
+description = "Standalone runtime and parser package for Veydra system dynamics models"
+authors = [{name = "Veydra Team", email = "support@veydra.com"}]
+license = {text = "Apache-2.0"}
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
@@ -19,3 +19,6 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/veydra/veydra-model-standard"
 Repository = "https://github.com/veydra/veydra-model-standard"
+
+[tool.setuptools]
+license-files = ["LICENSE"]

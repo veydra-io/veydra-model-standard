@@ -21,10 +21,10 @@ The goal is to make model behavior reproducible and inspectable in:
 
 ## What Sets This Apart
 
-- One package for both runtime primitives and parser APIs
-- Designed for cloud and local parity, not just notebook-only experimentation
-- Supports direct model introspection workflows used by higher-level assistants
-- Uses explicit, structured outputs intended for automation and downstream tooling
+- Code-first canonical source of truth, rather than diagram-first authoring as the primary artifact
+- Runtime and parser parity from the same package, instead of separate translation layers between diagrams and execution
+- Flexible primitives with explicit contracts, avoiding tightly opinionated framework constraints on model structure
+- Structured introspection outputs designed for automation, cloud services, and assistant tooling
 
 ## Features
 
@@ -53,20 +53,61 @@ pip install -e .
 from veydra_model_standard import VeydraModelStandard
 
 class MyModel(VeydraModelStandard):
-    def __init__(self, params):
-        super().__init__(params)
-
     @classmethod
     def auto_discover_variables(cls):
         return {
-            "stock.population": {
+            "demo.population": {
                 "name": "Population",
                 "category": "stock",
                 "default": 1000,
                 "units": "people",
                 "description": "Total population stock",
+            },
+            "demo.growth_rate": {
+                "name": "Growth rate",
+                "category": "parameter",
+                "default": 5,
+                "units": "people per step",
+                "description": "Linear growth per time step",
             }
         }
+
+    def run_simulation(self, params):
+        variables = self.auto_discover_variables()
+        resolved = self._resolve_parameters(self._clean_params(params), variables)
+
+        duration = int(resolved.get("simulation.duration", 10))
+        growth = float(resolved["demo.growth_rate"])
+
+        time = list(range(duration + 1))
+        series = [variables["demo.population"]["default"] + growth * t for t in time]
+
+        return {
+            "success": True,
+            "time": time,
+            "stocks": {"demo.population": series},
+            "flows": {},
+        }
+
+
+model = MyModel(params={})
+
+# Single run
+single = model.run_simulation({"simulation.duration": 5, "demo.growth_rate": 8})
+print(single["stocks"]["demo.population"][-1])  # 1040.0
+
+# Multi-scenario run with summary output
+batch = model.run_multi_scenario(
+    {
+        "__output_format__": "summary",
+        "__summary_variable__": "demo.population",
+        "scenarios": [
+            {"id": "low", "params": {"demo.growth_rate": 4, "simulation.duration": 5}},
+            {"id": "high", "params": {"demo.growth_rate": 9, "simulation.duration": 5}},
+        ],
+    }
+)
+print(batch["summary"]["rows"])
 ```
 
 ## Parser API Surface

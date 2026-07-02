@@ -157,6 +157,18 @@ def resolve_flow_variable(flow_name: str, stock_name: str, stock_info: Dict[str,
     return None
 
 
+def _resolves_to_flow(
+    dependency_name: str,
+    file_dependencies: Dict[str, List[str]],
+    alias_index: Dict[str, Set[str]],
+    variables: Dict[str, Dict[str, Any]],
+) -> bool:
+    for source_name in resolve_dependency_targets(dependency_name, file_dependencies, alias_index):
+        if variables.get(source_name, {}).get("type") == "flow":
+            return True
+    return False
+
+
 def _extract_expression_dependencies(expr_node: ast.AST) -> List[str]:
     dependencies: List[str] = []
 
@@ -320,6 +332,65 @@ def _extract_signed_dependencies_from_expression(expression: str) -> List[Tuple[
     return _extract_signed_dependencies(parsed.body)
 
 
+def _infer_expression_sign(node: ast.AST) -> int | None:
+    if isinstance(node, ast.UnaryOp):
+        if isinstance(node.op, ast.USub):
+            inner_sign = _infer_expression_sign(node.operand)
+            return -inner_sign if inner_sign is not None else -1
+        if isinstance(node.op, ast.UAdd):
+            inner_sign = _infer_expression_sign(node.operand)
+            return inner_sign if inner_sign is not None else 1
+
+    if isinstance(node, ast.BinOp):
+        if isinstance(node.op, ast.Add):
+            left_sign = _infer_expression_sign(node.left)
+            right_sign = _infer_expression_sign(node.right)
+            if left_sign is not None and right_sign is not None and left_sign == right_sign:
+                return left_sign
+            return None
+        if isinstance(node.op, ast.Sub):
+            left_sign = _infer_expression_sign(node.left)
+            right_sign = _infer_expression_sign(node.right)
+            if left_sign is not None and right_sign is not None and left_sign == -right_sign:
+                return left_sign
+            return None
+        if isinstance(node.op, (ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow)):
+            left_sign = _infer_expression_sign(node.left)
+            right_sign = _infer_expression_sign(node.right)
+            if left_sign is None or right_sign is None:
+                return None
+            return left_sign * right_sign
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        if node.value > 0:
+            return 1
+        if node.value < 0:
+            return -1
+        return None
+
+    if isinstance(node, (ast.Name, ast.Call, ast.Attribute, ast.Subscript)):
+        return 1
+
+    return None
+
+
+def _infer_uniform_expression_sign(expression: str) -> int | None:
+    raw = str(expression or "").strip()
+    if not raw:
+        return None
+
+    rhs = raw.split("=", 1)[1].strip() if "=" in raw else raw
+    if not rhs:
+        return None
+
+    try:
+        parsed = ast.parse(rhs, mode="eval")
+    except Exception:
+        return None
+
+    return _infer_expression_sign(parsed.body)
+
+
 def _extract_variables_from_source(file_path: str, source_code: str) -> Tuple[Dict[str, Dict[str, Any]], List[Tuple[str, str, str]]]:
     namespace = normalize_namespace(file_path)
     variables: Dict[str, Dict[str, Any]] = {}
@@ -467,6 +538,19 @@ def build_flow_diagram_from_source_map(file_map: Dict[str, str]) -> Dict[str, An
                     for dep_name, dep_sign in expression_signed_deps:
                         pair = (dep_name, dep_sign)
                         if pair not in merged_signed_deps:
+                            merged_signed_deps.append(pair)
+
+                    # Preserve direct flow aliases from the derivative mapping
+                    # (for example `{'stock': price_change_flow}`) so physical
+                    # stock-flow links survive when the alias expands to a raw
+                    # arithmetic formula with no published flow identifier left.
+                    expression_sign = _infer_uniform_expression_sign(stock_expression)
+                    for dep_name, dep_sign in base_signed_deps:
+                        if _resolves_to_flow(dep_name, file_dependencies, alias_index, variables):
+                            resolved_sign = expression_sign if expression_sign is not None else dep_sign
+                            pair = (dep_name, resolved_sign)
+                            if pair in merged_signed_deps:
+                                continue
                             merged_signed_deps.append(pair)
                 else:
                     merged_signed_deps = base_signed_deps

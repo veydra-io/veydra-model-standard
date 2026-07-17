@@ -33,6 +33,23 @@ def normalize_category(raw: Any) -> str:
     return CATEGORY_MAP.get(key, "auxiliary")
 
 
+def semantic_category(var_def: Dict[str, Any]) -> str:
+    """The semantic kind of a VARIABLES entry, tolerant of field conflation.
+
+    'category' is the record of truth, but generated models sometimes omit it
+    and put the semantic kind in 'type' instead ('type': 'stock'), where 'type'
+    normally holds the widget kind ('slider'). Fall back to 'type' only when
+    its value IS a semantic kind — widget values are not in CATEGORY_MAP, so a
+    real widget 'type' never masquerades as a category.
+    """
+    raw = var_def.get("category")
+    if not raw:
+        t = str(var_def.get("type") or "").strip().lower()
+        if t in CATEGORY_MAP:
+            raw = t
+    return normalize_category(raw)
+
+
 def normalize_namespace(file_path: str) -> str:
     parts = [p for p in str(file_path).split("/") if p]
     if len(parts) >= 3 and parts[1] == "src":
@@ -756,7 +773,7 @@ def _extract_variables_from_source(file_path: str, source_code: str) -> Tuple[Di
                 "id": f"{namespace}::{var_name}",
                 "name": var_name,
                 "namespace": namespace,
-                "type": normalize_category(var_def.get("category")),
+                "type": semantic_category(var_def),
                 "label": var_def.get("label") or var_name,
                 "inflows": var_def.get("inflows") if isinstance(var_def.get("inflows"), list) else [],
                 "outflows": var_def.get("outflows") if isinstance(var_def.get("outflows"), list) else [],
@@ -809,7 +826,7 @@ def build_flow_diagram_from_source_map(file_map: Dict[str, str]) -> Dict[str, An
             elif var_name in parameters:
                 inferred_type = "parameter"
             elif var_name in auxiliary:
-                inferred_type = normalize_category(var_def.get("category"))
+                inferred_type = semantic_category(var_def)
 
             existing = variables.get(var_name, {})
             inflows = var_def.get("inflows") if isinstance(var_def.get("inflows"), list) else existing.get("inflows", [])
@@ -868,6 +885,36 @@ def build_flow_diagram_from_source_map(file_map: Dict[str, str]) -> Dict[str, An
             if local_short in published_shorts or len(flow_names) != 1:
                 continue  # ambiguous, or the local names a real variable already
             flow_alias_short[local_short] = _short_var_segment(next(iter(flow_names)))
+
+        # Dict-literal identity aliases: a flows-dict entry publishing a bare
+        # local ({'resource.regeneration_flow': regen_flow}) links that local to
+        # the flow even when the local's name abbreviates the published tail.
+        # flow_expressions can't recover this — the AST parser resolves the
+        # expression THROUGH the local, discarding the identity — so read it
+        # off the mapping dict itself (any dict literal: named or inline return).
+        source_code = file_map.get(file_result["file_path"], "")
+        try:
+            _alias_tree = ast.parse(source_code)
+        except Exception:
+            _alias_tree = None
+        if _alias_tree is not None:
+            for _n in ast.walk(_alias_tree):
+                if not isinstance(_n, ast.Dict):
+                    continue
+                for _k, _v in zip(_n.keys, _n.values):
+                    if not (isinstance(_k, ast.Constant) and isinstance(_k.value, str)
+                            and isinstance(_v, ast.Name)):
+                        continue
+                    _pub = _k.value
+                    if variables.get(_pub, {}).get("type") != "flow":
+                        continue
+                    _local = _v.id
+                    if _local == _pub.split(".")[-1]:
+                        continue  # exact self-alias; alias_candidates covers it
+                    alias_index.setdefault(_local, set()).add(_pub)
+                    _local_short = _short_var_segment(_local)
+                    if _local_short not in published_shorts:
+                        flow_alias_short.setdefault(_local_short, _short_var_segment(_pub))
 
     for file_result in per_file_results:
         parse_result = file_result["result"]

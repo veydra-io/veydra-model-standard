@@ -386,11 +386,19 @@ class VeydraModelASTParser:
     
     def _categorize_variables(self):
         """Categorize variables into parameters, stocks, flows based on VMS rules."""
+        _semantic_kinds = {'stock', 'flow', 'rate', 'parameter', 'auxiliary', 'variable', 'constant'}
         for var_name, var_def in self.variables.items():
             if not isinstance(var_def, dict):
                 continue
-                
+
             category = var_def.get('category', '')
+            if not category:
+                # Generated models sometimes omit 'category' and put the semantic
+                # kind in 'type' ('type': 'stock'). Widget values ('slider',
+                # 'number') are not semantic kinds, so they never masquerade.
+                _t = str(var_def.get('type') or '').strip().lower()
+                if _t in _semantic_kinds:
+                    category = _t
             
             # Categorize based on explicit category
             if category == 'stock':

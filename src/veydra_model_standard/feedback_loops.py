@@ -131,13 +131,13 @@ def find_feedback_loops(causal_links, max_loop_length=50):
         # Remove the closing node (last element that repeats the first)
         cycle = loop[:-1]
         
-        # Normalize loop by finding minimum rotation and its reverse
-        rotations = [cycle[i:] + cycle[:i] for i in range(len(cycle))]
-        reverse_rotations = [cycle[::-1][i:] + cycle[::-1][:i] for i in range(len(cycle))]
-        
-        # Find the lexicographically smallest representation
-        min_rotation = min(rotations + reverse_rotations)
-        
+        # Normalize to the lexicographically smallest rotation. Reversing is NOT a
+        # valid normalization for a directed cycle: A->B->C->A and A->C->B->A are
+        # different loops, and when the reversed order sorts smaller it is stored
+        # as the loop, so every edges[(source, target)] lookup below misses, the
+        # polarity product sees no "-" and the loop misreports as reinforcing.
+        min_rotation = min(cycle[i:] + cycle[:i] for i in range(len(cycle)))
+
         if min_rotation not in unique_loops:
             unique_loops.append(min_rotation)
     
@@ -184,8 +184,11 @@ def find_feedback_loops(causal_links, max_loop_length=50):
             'type': 'reinforcing' if loop_polarity == "+" else 'balancing'
         })
     
-    # Sort loops by length and type
-    analyzed_loops.sort(key=lambda x: (x['length'], x['type']))
+    # Sort loops by length, type, then the (rotation-normalized) variable tuple
+    # so ordering — and the loop_N ids consumers assign from it — is fully
+    # deterministic regardless of graph-traversal/discovery order, which can
+    # vary with set iteration (PYTHONHASHSEED).
+    analyzed_loops.sort(key=lambda x: (x['length'], x['type'], tuple(x['variables'])))
     
     return {
         'loops': analyzed_loops,
